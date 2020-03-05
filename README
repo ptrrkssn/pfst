@@ -1,0 +1,48 @@
+Peter's Filesystem Simple Tester
+
+This is really a super simple program that tests and measures the time certain
+common operations take.
+
+I personally use it to verify correct behaviour of NFS filesystems from multiple 
+servers at the same time.
+
+It basically does this test in a subprocess for each <dir> specified on the
+command line:
+
+while (forever || -n<loops>) {
+   mkdir("t-$HOST-$PID");
+   if (-c) {
+     chdir("t-$HOST-$PID");
+     fd = open("test1.dat", O_CREAT|O_WRONLY);
+     write(fd, buf, 64K);
+     if (-s)
+       fsync(fd);
+     close(fd);
+     rename("test1.dat", "test2.dat");
+     fd = open("test2.dat", O_RDONLY);
+     read(fd, buf, 64K);
+     close(fd);
+     unlink("test2.dat");
+     chdir("..");
+   }
+   rmdir("t-$HOST-$PID")
+   sleep(1);
+}
+
+
+EXAMPLES:
+
+Loop forever and alert if any of the operations take more than 30ms:
+
+  ./pfst -c -t30ms /mnt/server1 /mnt/server2 /mnt/server3
+
+Run one test of just the "mkdir/rmdir" operation and be verbose:
+
+  ./pfst -n1 -v .
+
+
+SOURCE:
+
+	https://github.com/ptrrkssn/pfst
+
+- Peter Eriksson, 2020-03-05, pen@lysator.liu.se
