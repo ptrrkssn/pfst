@@ -5,6 +5,8 @@ CFLAGS=-O
 OBJS=pfst.o
 
 all: pfst
+
+pfst: $(OBJS)
 	$(CC) -o pfst $(OBJS)
 
 clean:
@@ -12,3 +14,9 @@ clean:
 
 install: pfst
 	cp pfst $(DEST)
+
+push:	clean
+	git add -A && git commit -a
+
+pull:
+	git pull

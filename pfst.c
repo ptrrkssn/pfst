@@ -1,5 +1,5 @@
 /*
- * fstest.c - A simple filesystem latency tester
+ * pfst.c - A simple filesystem latency tester
  *
  * Copyright (c) 2020 Peter Eriksson <pen@lysator.liu.se>
  *
@@ -47,7 +47,7 @@
 #include <sys/wait.h>
 
 
-char *argv0 = "fstest";
+char *argv0 = "pfst";
 char *version = "1.4";
 
 int f_timeout = 1000000;
