@@ -611,7 +611,7 @@ main(int argc,
   signal(SIGINT, sigint_handler);
 
   if (f_verbose)
-    printf("[fstest, version %s]\n", version);
+    printf("[pfst, version %s - Peter Eriksson <pen@lysator.liu.se>]\n", version);
 
   pidv = calloc(argc-i, sizeof(pidv[0]));
   if (!pidv) {
