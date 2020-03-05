@@ -48,7 +48,7 @@
 
 
 char *argv0 = "pfst";
-char *version = "1.4";
+char *version = "1.5";
 
 int f_timeout = 1000000;
 int f_bufsize = 65536;
@@ -56,8 +56,10 @@ int f_sync = 0;
 int f_verbose = 0;
 int f_mkdir = 0;
 int f_complex = 0;
+int f_delay = 1;
 
 unsigned long f_loops = 0;
+
 
 /*
  * Calculate the difference between two struct timespec.
@@ -279,8 +281,7 @@ start_test_simple(const char *path,
 	  rc = -1;
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: write(\"%s\")", path, fn1);   
-	
+	p_log(0, &t0, "%s: write(\"%s\")=%d", path, fn1, rc);
 	
 	
 	/* Potentially sync temp file ---------------------------------------- */
@@ -396,7 +397,7 @@ start_test_simple(const char *path,
       }
       p_log(0, &t0, "%s: rmdir(\"%s\")", path, subpath);
 
-      sleep(1);
+      sleep(f_delay);
     }
   
     _exit(0);
@@ -464,6 +465,7 @@ main(int argc,
 	puts("  -n <loops> Limit test loops");
 	puts("  -b <size>  Buffer size to write/read [64k]");
 	puts("  -t <time>  Test timeout [1s]");
+	puts("  -w <time>  Delay between tests [1s]");
 	exit(0);
 	
       case 'n':
@@ -530,6 +532,49 @@ main(int argc,
 
 	default:
 	  fprintf(stderr, "%s: Error: %s: Invalid timeout\n",
+		  argv[0], cp);
+	  exit(1);
+	}
+	goto NextArg;
+
+
+      case 'w':
+	if (isdigit(argv[i][j+1]))
+	  cp = argv[i]+j+1;
+	else if (i+1 < argc && isdigit(argv[i+1][0]))
+	  cp = argv[++i];
+	else {
+	  fprintf(stderr, "%s: Error: -w: Missing required delay\n",
+		  argv[0]);
+	  exit(1);
+	}
+	if (sscanf(cp, "%d%c", &f_delay, &pfx) < 1) {
+	  fprintf(stderr, "%s: Error: %s: Invalid delay\n",
+		  argv[0], cp);
+	  exit(1);
+	}
+	switch (toupper(pfx)) {
+	case 'S':
+	  break;
+	  
+	case 'M':
+	  f_delay *= 60;
+	  break;
+	  
+	case 'H':
+	  f_delay *= 60*60;
+	  break;
+	  
+	case 'D':
+	  f_delay *= 60*60*24;
+	  break;
+	  
+	case 'W':
+	  f_delay *= 60*60*24*7;
+	  break;
+	  
+	default:
+	  fprintf(stderr, "%s: Error: %s: Invalid delay\n",
 		  argv[0], cp);
 	  exit(1);
 	}
