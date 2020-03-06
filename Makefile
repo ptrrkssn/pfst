@@ -17,7 +17,7 @@ install: pfst
 	cp pfst $(DEST)
 
 push:	clean
-	git add -A && git commit -a
+	git add -A && git commit -a && git push
 
 pull:
 	git pull
