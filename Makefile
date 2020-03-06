@@ -2,6 +2,7 @@
 
 DEST=/usr/local/bin
 CFLAGS=-O
+
 OBJS=pfst.o
 
 all: pfst

@@ -39,12 +39,13 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <signal.h>
 #include <syslog.h>
 #include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
+
 
 
 char *argv0 = "pfst";
@@ -257,7 +258,7 @@ start_test_simple(const char *path,
 	/* Open temp file ---------------------------------------- */
 	
 	clock_gettime(CLOCK_REALTIME, &t0);
-	fd = open(fn1, O_CREAT|O_WRONLY, 0600);
+	fd = open(fn1, O_CREAT|O_WRONLY|(f_sync > 1 ? O_SYNC : 0), 0600);
 	if (fd < 0) {
 	  p_log(errno, &t0, "%s: open(\"%s\", WR)", path, fn1);
 	  rc = fd;
@@ -286,7 +287,7 @@ start_test_simple(const char *path,
 	
 	/* Potentially sync temp file ---------------------------------------- */
 	
-	if (f_sync) {
+	if (f_sync & 1) {
 	  clock_gettime(CLOCK_REALTIME, &t0);
 	  rc = fsync(fd);
 	  if (rc < 0) {
