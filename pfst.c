@@ -38,6 +38,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <errno.h>
+#include <setjmp.h>
 #include <time.h>
 #include <signal.h>
 #include <syslog.h>
@@ -49,7 +50,7 @@
 
 
 char *argv0 = "pfst";
-char *version = "1.5";
+char *version = "1.6";
 
 int f_timeout = 1000000;
 int f_bufsize = 65536;
@@ -58,9 +59,11 @@ int f_verbose = 0;
 int f_mkdir = 0;
 int f_complex = 0;
 int f_delay = 1;
+int f_alarm = 0;
 
 unsigned long f_loops = 0;
 
+FILE *logfp;
 
 /*
  * Calculate the difference between two struct timespec.
@@ -119,7 +122,8 @@ ts_delta(struct timespec *x,
 
 
 void
-p_log(int e,
+p_log(FILE *fp, 
+      int e,
       struct timespec *t0,
       const char *fmt,
       ...) {
@@ -133,6 +137,9 @@ p_log(int e,
   char *us = NULL;
   
   
+  if (!fp)
+    fp = stdout;
+
   if (t0) {
     clock_gettime(CLOCK_REALTIME, &t1);
     td = ts_delta(&t1, t0, &tv, &us);
@@ -144,19 +151,20 @@ p_log(int e,
   time(&now);
   tp = localtime(&now);
   strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", tp);
-  fprintf(stderr, "%s [%4ld %-2s]: ", tbuf, tv, us);
+  fprintf(fp, "%s [%4ld %-2s]: ", tbuf, tv, us);
   
   va_start(ap, fmt);
-  vfprintf(stderr, fmt, ap);
+  vfprintf(fp, fmt, ap);
   va_end(ap);
 
   if (e)
-    fprintf(stderr, ": %s", strerror(e));
+    fprintf(fp, ": %s", strerror(e));
 
   if (td >= f_timeout)
-    fprintf(stderr, " [Time limit exceeded]");
+    fprintf(fp, " [Time limit exceeded]");
 
-  putc('\n', stderr);
+  putc('\n', fp);
+  fflush(fp);
 }
 
 
@@ -177,6 +185,13 @@ spin(void) {
   }
 }
 
+
+sigjmp_buf alrm_env;
+
+void
+sigalrm_handler(int sig) {
+  longjmp(alrm_env, 1);
+}
 
 
 int
@@ -201,7 +216,7 @@ start_test_simple(const char *path,
   
   if (!pid) {
     /* In child process */
-    char subpath[256], *cp;
+    char subpath[256], *cp, *spe;
 
     signal(SIGINT, SIG_IGN);
 
@@ -213,6 +228,7 @@ start_test_simple(const char *path,
     else
       cp = subpath+strlen(subpath);
     sprintf(cp, "-%d", getpid());
+    spe = subpath+strlen(subpath)-1;
 
 
     /* Change to main directory ---------------------------------------- */
@@ -220,7 +236,7 @@ start_test_simple(const char *path,
     clock_gettime(CLOCK_REALTIME, &t0);
     rc = chdir(path);
     if (rc < 0) {
-      p_log(errno, &t0, "chdir(\"%s\")", path);
+      p_log(logfp, errno, &t0, "chdir(\"%s\")", path);
       _exit(1);
     }
   
@@ -228,175 +244,214 @@ start_test_simple(const char *path,
     while (!f_loops || loop < f_loops) {
       ++loop;
 
-      if (f_verbose)
+      sprintf(spe, "-%d", loop);
+
+      if (f_verbose > 1)
 	fprintf(stderr, "\nLoop #%lu:\n", loop);
+
+      if (f_alarm) {
+	if (setjmp(alrm_env)) {
+	  fputs("\n*** Abort Timeout***\n", stderr);
+	  continue;
+	}
+
+	signal(SIGALRM, sigalrm_handler);
+      }
+
 
       /* Create temp directory ---------------------------------------- */
 
+      if (f_alarm)
+	alarm(f_alarm);
       clock_gettime(CLOCK_REALTIME, &t0);
       rc = mkdir(subpath, 0700);
       if (rc < 0) {
-	p_log(errno, &t0, "%s: mkdir(\"%s\")", path, subpath);
+	p_log(logfp, errno, &t0, "%s: mkdir(\"%s\")", path, subpath);
 	goto ErrorExit;
       }
-      p_log(0, &t0, "%s: mkdir(\"%s\")", path, subpath);
+      p_log(logfp, 0, &t0, "%s: mkdir(\"%s\")", path, subpath);
 
     
 
       if (f_complex > 0) {
 	/* Change to temp directory ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	rc = chdir(subpath);
 	if (rc < 0) {
-	  p_log(errno, &t0, "%s: chdir(\"%s\")", path, subpath);
+	  p_log(logfp, errno, &t0, "%s: chdir(\"%s\")", path, subpath);
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: chdir(\"%s\")", path, subpath);
+	p_log(logfp, 0, &t0, "%s: chdir(\"%s\")", path, subpath);
 	
 	
 	/* Open temp file ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	fd = open(fn1, O_CREAT|O_WRONLY|(f_sync > 1 ? O_SYNC : 0), 0600);
 	if (fd < 0) {
-	  p_log(errno, &t0, "%s: open(\"%s\", WR)", path, fn1);
+	  p_log(logfp, errno, &t0, "%s: open(\"%s\", WR)", path, fn1);
 	  rc = fd;
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: open(\"%s\", WR)", path, fn1);
+	p_log(logfp, 0, &t0, "%s: open(\"%s\", WR)", path, fn1);
 	
 	
 	/* Write temp file ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	rc = write(fd, buf, bsize);
 	if (rc < 0) {
-	  p_log(errno, &t0, "%s: write(\"%s\", ..., %lu)",
+	  p_log(logfp, errno, &t0, "%s: write(\"%s\", ..., %lu)",
 		path, fn1, (unsigned long) sizeof(buf));
 	  goto ErrorExit;
 	}
 	if (rc != bsize) {
-	  p_log(0, &t0, "%s: write(\"%s\", ..., %lu)=%d: Short write",
+	  p_log(logfp, 0, &t0, "%s: write(\"%s\", ..., %lu)=%d: Short write",
 		path, fn1, (unsigned long) bsize, rc);
 	  rc = -1;
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: write(\"%s\")=%d", path, fn1, rc);
+	p_log(logfp, 0, &t0, "%s: write(\"%s\")=%d", path, fn1, rc);
 	
 	
 	/* Potentially sync temp file ---------------------------------------- */
 	
 	if (f_sync & 1) {
+	  if (f_alarm)
+	    alarm(f_alarm);
 	  clock_gettime(CLOCK_REALTIME, &t0);
 	  rc = fsync(fd);
 	  if (rc < 0) {
-	    p_log(errno, &t0, "%s: fsync(\"%s\")", path, fn1);
+	    p_log(logfp, errno, &t0, "%s: fsync(\"%s\")", path, fn1);
 	    goto ErrorExit;
 	  }
-	  p_log(0, &t0, "%s: fsync(\"%s\")", path, fn1);
+	  p_log(logfp, 0, &t0, "%s: fsync(\"%s\")", path, fn1);
 	}
 	
 	
 	/* Close temp file ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	rc = close(fd);
 	if (rc < 0) {
-	  p_log(errno, &t0, "%s: close(\"%s\")", path, fn1);
+	  p_log(logfp, errno, &t0, "%s: close(\"%s\")", path, fn1);
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: close(\"%s\")", path, fn1);
+	p_log(logfp, 0, &t0, "%s: close(\"%s\")", path, fn1);
 	
 	
 	/* Rename temp file ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	rc = rename(fn1, fn2);
 	if (rc < 0) {
-	  p_log(errno, &t0, "%s: rename(\"%s\", \"%s\")",
+	  p_log(logfp, errno, &t0, "%s: rename(\"%s\", \"%s\")",
 		path, fn1, fn2);
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: rename(\"%s\", \"%s\")", path, fn1, fn2);
+	p_log(logfp, 0, &t0, "%s: rename(\"%s\", \"%s\")", path, fn1, fn2);
 	
 	
 	/* Open temp file for reading ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	fd = open(fn2, O_RDONLY, 0600);
 	if (fd < 0) {
-	  p_log(errno, &t0, "%s: open(\"%s\")",
+	  p_log(logfp, errno, &t0, "%s: open(\"%s\")",
 		path, fn2);
 	  rc = fd;
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: open(\"%s\", RD)", path, fn2);
+	p_log(logfp, 0, &t0, "%s: open(\"%s\", RD)", path, fn2);
 	
 	
 	/* Read temp file ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	rc = read(fd, buf, bsize);
 	if (rc < 0) {
-	  p_log(errno, &t0, "%s: read(\"%s\", ..., %lu)",
+	  p_log(logfp, errno, &t0, "%s: read(\"%s\", ..., %lu)",
 		path, fn2, (unsigned long) sizeof(buf));
 	  goto ErrorExit;
 	}
 	if (rc != bsize) {
-	  p_log(0, &t0, "%s: read(\"%s\", ..., %lu)=%d: Short read",
+	  p_log(logfp, 0, &t0, "%s: read(\"%s\", ..., %lu)=%d: Short read",
 		path, fn2, (unsigned long) bsize, rc);
 	  rc = -1;
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: read(\"%s\", %d)=%d", path, fn2, bsize, rc);
+	p_log(logfp, 0, &t0, "%s: read(\"%s\", %d)=%d", path, fn2, bsize, rc);
 	
 	
 	
 	/* Close temp file ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	rc = close(fd);
 	if (rc < 0) {
-	  p_log(errno, &t0, "%s: close(\"%s\")",
+	  p_log(logfp, errno, &t0, "%s: close(\"%s\")",
 		path, fn2);
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: close(\"%s\")", path, fn2);
+	p_log(logfp, 0, &t0, "%s: close(\"%s\")", path, fn2);
 	
 	
 	/* Delete temp file ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	rc = unlink(fn2);
 	if (rc < 0) {
-	  p_log(errno, &t0, "%s: unlink(\"%s\")", path, fn2);
+	  p_log(logfp, errno, &t0, "%s: unlink(\"%s\")", path, fn2);
 	  goto ErrorExit;
 	}
-	p_log(0, &t0, "%s: unlink(\"%s\")", path, fn2);
+	p_log(logfp, 0, &t0, "%s: unlink(\"%s\")", path, fn2);
 	
 	
 	/* Go to parent directory ---------------------------------------- */
 	
+	if (f_alarm)
+	  alarm(f_alarm);
 	clock_gettime(CLOCK_REALTIME, &t0);
 	rc = chdir("..");
 	if (rc < 0) {
-	  p_log(errno, &t0, "%s: chdir(\"..\")", path);
+	  p_log(logfp, errno, &t0, "%s: chdir(\"..\")", path);
 	  _exit(1);
 	}
-	p_log(0, &t0, "%s: chdir(\"..\")", path);
+	p_log(logfp, 0, &t0, "%s: chdir(\"..\")", path);
       }
 
       /* Remove our temp directory ---------------------------------------- */
 
+      if (f_alarm)
+	alarm(f_alarm);
       clock_gettime(CLOCK_REALTIME, &t0);
       rc = rmdir(subpath);
       if (rc < 0) {
-	p_log(errno, &t0, "%s: chdir(\"%s\")",
+	p_log(logfp, errno, &t0, "%s: chdir(\"%s\")",
 	       path, subpath);
 	_exit(1);
       }
-      p_log(0, &t0, "%s: rmdir(\"%s\")", path, subpath);
+      p_log(logfp, 0, &t0, "%s: rmdir(\"%s\")", path, subpath);
+
 
       sleep(f_delay);
     }
@@ -466,6 +521,7 @@ main(int argc,
 	puts("  -n <loops> Limit test loops");
 	puts("  -b <size>  Buffer size to write/read [64k]");
 	puts("  -t <time>  Test timeout [1s]");
+	puts("  -a <time>  Abort timeout [10s]");
 	puts("  -w <time>  Delay between tests [1s]");
 	exit(0);
 	
@@ -538,6 +594,40 @@ main(int argc,
 	}
 	goto NextArg;
 
+      case 'a':
+	if (isdigit(argv[i][j+1]))
+	  cp = argv[i]+j+1;
+	else if (i+1 < argc && isdigit(argv[i+1][0]))
+	  cp = argv[++i];
+	else {
+	  fprintf(stderr, "%s: Error: -a: Missing required abort timeout\n",
+		  argv[0]);
+	  exit(1);
+	}
+	if (sscanf(cp, "%d%c", &f_alarm, &pfx) < 1) {
+	  fprintf(stderr, "%s: Error: %s: Invalid abort timeout\n",
+		  argv[0], cp);
+	  exit(1);
+	}
+	switch (pfx) {
+	case 's':
+	  f_alarm *= 1000000;
+	  break;
+	  
+	case 'm':
+	  f_alarm *= 1000;
+	  break;
+	  
+	case 'u':
+	case 0:
+	  break;
+
+	default:
+	  fprintf(stderr, "%s: Error: %s: Invalid abort timeout\n",
+		  argv[0], cp);
+	  exit(1);
+	}
+	goto NextArg;
 
       case 'w':
 	if (isdigit(argv[i][j+1]))
@@ -666,7 +756,23 @@ main(int argc,
     exit(1);
   }
 
-  for (; i < argc; i++)
+  for (j = i; j < argc; j++) {
+    struct stat sbuf;
+
+    if (stat(argv[j], &sbuf) < 0) {
+      fprintf(stderr, "%s: Error: %s: %s\n",
+	      argv[0], argv[j], strerror(errno));
+      exit(1);
+    }
+
+    if (!S_ISDIR(sbuf.st_mode)) {
+      fprintf(stderr, "%s: Error: %s: Not a directory\n",
+	      argv[0], argv[j]);
+      exit(1);
+    }
+  }
+
+  for (; i < argc; i++) 
     pidv[pidc++] = start_test_simple(argv[i], buf, f_bufsize);
 
   while (1) {
