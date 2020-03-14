@@ -50,7 +50,7 @@
 
 
 char *argv0 = "pfst";
-char *version = "1.6";
+char *version = "1.7";
 
 int f_timeout = 1000000;
 int f_bufsize = 65536;
@@ -60,6 +60,7 @@ int f_mkdir = 0;
 int f_complex = 0;
 int f_delay = 1;
 int f_alarm = 0;
+int f_lock = 0;
 
 unsigned long f_loops = 0;
 
@@ -217,9 +218,12 @@ start_test_simple(const char *path,
   if (!pid) {
     /* In child process */
     char subpath[256], *cp, *spe;
+    struct sigaction sact;
 
-    signal(SIGINT, SIG_IGN);
-
+    memset(&sact, 0, sizeof(sact));
+    sigaction(SIGINT, &sact, NULL);
+    sigaction(SIGALRM, &sact, NULL);
+    
     strcpy(subpath, "t-");
     gethostname(subpath+2, sizeof(subpath)-2);
     cp = strchr(subpath+2, '.');
@@ -254,8 +258,6 @@ start_test_simple(const char *path,
 	  fputs("\n*** Abort Timeout***\n", stderr);
 	  continue;
 	}
-
-	signal(SIGALRM, sigalrm_handler);
       }
 
 
@@ -378,6 +380,33 @@ start_test_simple(const char *path,
 	p_log(logfp, 0, &t0, "%s: open(\"%s\", RD)", path, fn2);
 	
 	
+	if (f_lock) {
+	  /* Lock temp file ---------------------------------------- */
+	  struct flock lck;
+	  
+
+	  lck.l_type = F_RDLCK;
+	  lck.l_whence = SEEK_SET;
+	  lck.l_start = 0;
+	  lck.l_len = bsize;
+
+	  if (f_alarm)
+	    alarm(f_alarm);
+	  clock_gettime(CLOCK_REALTIME, &t0);
+	  rc = fcntl(fd, ((f_lock & 0x01) ? F_SETLK : F_SETLKW), &lck);
+	  if (rc < 0) {
+	    p_log(logfp, errno, &t0, "%s: fcntl(\"%s\", F_SETLK%s)",
+		  path, fn2, 
+		  ((f_lock & 0x01) ? "" : "W"));
+	    goto ErrorExit;
+	  }
+	  p_log(logfp, 0, &t0, "%s: fcntl(\"%s\", F_SETLK%s)=%d", 
+		path, fn2, 
+		((f_lock & 0x01) ? "" : "W"), 
+		rc);
+	}
+
+
 	/* Read temp file ---------------------------------------- */
 	
 	if (f_alarm)
@@ -397,8 +426,7 @@ start_test_simple(const char *path,
 	}
 	p_log(logfp, 0, &t0, "%s: read(\"%s\", %d)=%d", path, fn2, bsize, rc);
 	
-	
-	
+
 	/* Close temp file ---------------------------------------- */
 	
 	if (f_alarm)
@@ -499,7 +527,8 @@ main(int argc,
   int i, j;
   char *cp;
   char *buf = NULL;
-  char pfx;
+  char p1, p2;
+  struct sigaction sact;
 
   
   argv0 = argv[0];
@@ -518,6 +547,7 @@ main(int argc,
 	puts("  -s         fsync() all writes");
 	puts("  -m         mkdir/rmdir <dir>");
 	puts("  -c         Increase test complexity");
+	puts("  -l         Use locking");
 	puts("  -n <loops> Limit test loops");
 	puts("  -b <size>  Buffer size to write/read [64k]");
 	puts("  -t <time>  Test timeout [1s]");
@@ -535,12 +565,12 @@ main(int argc,
 		  argv[0]);
 	  exit(1);
 	}
-	if (sscanf(cp, "%lu%c", &f_loops, &pfx) < 1) {
+	if (sscanf(cp, "%lu%c", &f_loops, &p1) < 1) {
 	  fprintf(stderr, "%s: Error: %s: Invalid loop count\n",
 		  argv[0], cp);
 	  exit(1);
 	}
-	switch (toupper(pfx)) {
+	switch (toupper(p1)) {
 	case 'K':
 	  f_loops *= 1000;
 	  break;
@@ -569,18 +599,22 @@ main(int argc,
 		  argv[0]);
 	  exit(1);
 	}
-	if (sscanf(cp, "%d%c", &f_timeout, &pfx) < 1) {
+	p1 = p2 = 0;
+	if (sscanf(cp, "%d%c%c", &f_timeout, &p1, &p2) < 1) {
 	  fprintf(stderr, "%s: Error: %s: Invalid timeout\n",
 		  argv[0], cp);
 	  exit(1);
 	}
-	switch (pfx) {
+	switch (p1) {
 	case 's':
 	  f_timeout *= 1000000;
 	  break;
 	  
 	case 'm':
-	  f_timeout *= 1000;
+	  if (!p2)
+	    f_timeout *= 1000000*60;
+	  else if (p2 == 's')
+	    f_timeout *= 1000;
 	  break;
 	  
 	case 'u':
@@ -604,12 +638,12 @@ main(int argc,
 		  argv[0]);
 	  exit(1);
 	}
-	if (sscanf(cp, "%d%c", &f_alarm, &pfx) < 1) {
+	if (sscanf(cp, "%d%c", &f_alarm, &p1) < 1) {
 	  fprintf(stderr, "%s: Error: %s: Invalid abort timeout\n",
 		  argv[0], cp);
 	  exit(1);
 	}
-	switch (pfx) {
+	switch (p1) {
 	case 's':
 	  f_alarm *= 1000000;
 	  break;
@@ -639,28 +673,29 @@ main(int argc,
 		  argv[0]);
 	  exit(1);
 	}
-	if (sscanf(cp, "%d%c", &f_delay, &pfx) < 1) {
+	p1 = 0;
+	if (sscanf(cp, "%d%c", &f_delay, &p1) < 1) {
 	  fprintf(stderr, "%s: Error: %s: Invalid delay\n",
 		  argv[0], cp);
 	  exit(1);
 	}
-	switch (toupper(pfx)) {
-	case 'S':
+	switch (p1) {
+	case 's':
 	  break;
 	  
-	case 'M':
+	case 'm':
 	  f_delay *= 60;
 	  break;
 	  
-	case 'H':
+	case 'h':
 	  f_delay *= 60*60;
 	  break;
 	  
-	case 'D':
+	case 'd':
 	  f_delay *= 60*60*24;
 	  break;
 	  
-	case 'W':
+	case 'w':
 	  f_delay *= 60*60*24*7;
 	  break;
 	  
@@ -687,6 +722,10 @@ main(int argc,
 	f_complex++;
 	break;
 	
+      case 'l':
+	f_lock++;
+	break;
+	
       case 'b':
 	if (isdigit(argv[i][j+1]))
 	  cp = argv[i]+j+1;
@@ -697,13 +736,13 @@ main(int argc,
 		  argv[0]);
 	  exit(1);
 	}
-	pfx = 0;
-	if (sscanf(cp, "%d%c", &f_bufsize, &pfx) < 1) {
+	p1 = 0;
+	if (sscanf(cp, "%d%c", &f_bufsize, &p1) < 1) {
 	  fprintf(stderr, "%s: Error: %s: Invalid buffer size\n",
 		  argv[0], cp);
 	  exit(1);
 	}
-	switch (toupper(pfx)) {
+	switch (toupper(p1)) {
 	case 'K':
 	  f_bufsize *= 1024;
 	  break;
@@ -744,7 +783,9 @@ main(int argc,
     exit(1);
   }
 
-  signal(SIGINT, sigint_handler);
+  memset(&sact, 0, sizeof(sact));
+  sact.sa_handler = sigint_handler;
+  sigaction(SIGINT, &sact, NULL);
 
   if (f_verbose)
     printf("[pfst, version %s - Peter Eriksson <pen@lysator.liu.se>]\n", version);
