@@ -474,7 +474,7 @@ start_test_simple(const char *path,
       clock_gettime(CLOCK_REALTIME, &t0);
       rc = rmdir(subpath);
       if (rc < 0) {
-	p_log(logfp, errno, &t0, "%s: chdir(\"%s\")",
+	p_log(logfp, errno, &t0, "%s: rmdir(\"%s\")",
 	       path, subpath);
 	_exit(1);
       }
